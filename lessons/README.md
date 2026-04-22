@@ -45,6 +45,7 @@ curl client
 ## 문서별 역할
 | 문서 | 역할 | 읽고 나면 답해야 할 질문 |
 | --- | --- | --- |
+| [00_top_down_analysis_koh.md](00_top_down_analysis_koh.md) | 이번 정리에서 추가한 탑다운 분석 문서입니다. | SQL 처리기와 B+ 트리 이후 무엇이 추가되어 실제 서버 흐름이 되었는가? |
 | [01_big_picture.md](01_big_picture.md) | 프로젝트 전체를 CS 개념 지도처럼 훑습니다. | 이 프로젝트는 어떤 계층들을 통과하며 요청을 처리하는가? |
 | [02_architecture_walkthrough.md](02_architecture_walkthrough.md) | 요청 하나를 따라가며 구조와 원리를 풍부하게 설명합니다. | 각 파일은 무엇을 입력받고 무엇을 다음 단계로 넘기는가? |
 | [03_code_reading/README.md](03_code_reading/README.md) | 코드와 나란히 읽는 기술 문서의 입구입니다. | 어떤 순서로 코드를 읽어야 전체 흐름을 잃지 않는가? |
@@ -106,4 +107,4 @@ curl -s -X POST http://127.0.0.1:8080/query \
 - [ ] file storage, memory records, B+ tree index가 각각 왜 필요한지 설명할 수 있다.
 - [ ] thread pool과 read-write lock이 해결하는 문제가 서로 다르다는 것을 설명할 수 있다.
 
-다음 문서: [01_big_picture.md](01_big_picture.md)
+다음 문서: [00_top_down_analysis_koh.md](00_top_down_analysis_koh.md)

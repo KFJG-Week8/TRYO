@@ -2,127 +2,15 @@
 
 #include "util.h"
 
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} JsonBuilder;
 
 static void set_err(char *err, size_t err_size, const char *message)
 {
     if (err_size > 0) {
         snprintf(err, err_size, "%s", message);
     }
-}
-
-static int builder_init(JsonBuilder *builder)
-{
-    builder->cap = 256;
-    builder->len = 0;
-    builder->data = malloc(builder->cap);
-    if (builder->data == NULL) {
-        return 0;
-    }
-    builder->data[0] = '\0';
-    return 1;
-}
-
-static void builder_free(JsonBuilder *builder)
-{
-    free(builder->data);
-    builder->data = NULL;
-    builder->len = 0;
-    builder->cap = 0;
-}
-
-static int builder_reserve(JsonBuilder *builder, size_t extra)
-{
-    size_t needed = builder->len + extra + 1;
-
-    if (needed <= builder->cap) {
-        return 1;
-    }
-
-    while (builder->cap < needed) {
-        builder->cap *= 2;
-    }
-
-    char *next = realloc(builder->data, builder->cap);
-    if (next == NULL) {
-        return 0;
-    }
-
-    builder->data = next;
-    return 1;
-}
-
-static int builder_append(JsonBuilder *builder, const char *text)
-{
-    size_t len = strlen(text);
-
-    if (!builder_reserve(builder, len)) {
-        return 0;
-    }
-
-    memcpy(builder->data + builder->len, text, len + 1);
-    builder->len += len;
-    return 1;
-}
-
-static int builder_appendf(JsonBuilder *builder, const char *fmt, ...)
-{
-    va_list ap;
-    int written;
-
-    while (1) {
-        va_start(ap, fmt);
-        written = vsnprintf(builder->data + builder->len, builder->cap - builder->len, fmt, ap);
-        va_end(ap);
-
-        if (written < 0) {
-            return 0;
-        }
-
-        if (builder->len + (size_t)written < builder->cap) {
-            builder->len += (size_t)written;
-            return 1;
-        }
-
-        if (!builder_reserve(builder, (size_t)written + 1)) {
-            return 0;
-        }
-    }
-}
-
-static int builder_append_json_string(JsonBuilder *builder, const char *text)
-{
-    char *escaped = json_escape_dup(text);
-    int ok;
-
-    if (escaped == NULL) {
-        return 0;
-    }
-
-    ok = builder_append(builder, "\"") &&
-         builder_append(builder, escaped) &&
-         builder_append(builder, "\"");
-    free(escaped);
-    return ok;
-}
-
-static char *builder_take(JsonBuilder *builder)
-{
-    char *data = builder->data;
-
-    builder->data = NULL;
-    builder->len = 0;
-    builder->cap = 0;
-    return data;
 }
 
 static DbResult make_error_result(const char *message, long long start_us)
@@ -178,13 +66,13 @@ static int name_is_valid(const char *name)
 
 static int append_record_json(JsonBuilder *builder, const Record *record)
 {
-    return builder_append(builder, "{\"id\":") &&
-           builder_appendf(builder, "%d", record->id) &&
-           builder_append(builder, ",\"name\":") &&
-           builder_append_json_string(builder, record->name) &&
-           builder_append(builder, ",\"age\":") &&
-           builder_appendf(builder, "%d", record->age) &&
-           builder_append(builder, "}");
+    return json_builder_append(builder, "{\"id\":") &&
+           json_builder_appendf(builder, "%d", record->id) &&
+           json_builder_append(builder, ",\"name\":") &&
+           json_builder_append_string(builder, record->name) &&
+           json_builder_append(builder, ",\"age\":") &&
+           json_builder_appendf(builder, "%d", record->age) &&
+           json_builder_append(builder, "}");
 }
 
 static int load_record(DbEngine *db, const Record *record)
@@ -330,15 +218,15 @@ DbResult db_insert(DbEngine *db, const char *name, int age)
         return make_error_result("failed to update B+ tree index", start_us);
     }
 
-    if (!builder_init(&builder) || !builder_append(&builder, "[") ||
-        !append_record_json(&builder, &record) || !builder_append(&builder, "]")) {
-        builder_free(&builder);
+    if (!json_builder_init(&builder) || !json_builder_append(&builder, "[") ||
+        !append_record_json(&builder, &record) || !json_builder_append(&builder, "]")) {
+        json_builder_free(&builder);
         pthread_rwlock_unlock(&db->lock);
         return make_error_result("failed to serialize insert result", start_us);
     }
 
     result.ok = true;
-    result.rows_json = builder_take(&builder);
+    result.rows_json = json_builder_take(&builder);
     snprintf(result.message, sizeof(result.message), "inserted 1 row");
     result.index_used = false;
     result.elapsed_us = now_us() - start_us;
@@ -359,8 +247,8 @@ DbResult db_select(DbEngine *db, DbFilter filter)
         return make_error_result("failed to acquire read lock", start_us);
     }
 
-    if (!builder_init(&builder) || !builder_append(&builder, "[")) {
-        builder_free(&builder);
+    if (!json_builder_init(&builder) || !json_builder_append(&builder, "[")) {
+        json_builder_free(&builder);
         pthread_rwlock_unlock(&db->lock);
         return make_error_result("failed to serialize select result", start_us);
     }
@@ -370,7 +258,7 @@ DbResult db_select(DbEngine *db, DbFilter filter)
 
         if (bptree_search(&db->index, filter.id, &record_index) && record_index < db->count) {
             if (!append_record_json(&builder, &db->records[record_index])) {
-                builder_free(&builder);
+                json_builder_free(&builder);
                 pthread_rwlock_unlock(&db->lock);
                 return make_error_result("failed to serialize indexed row", start_us);
             }
@@ -385,14 +273,14 @@ DbResult db_select(DbEngine *db, DbFilter filter)
                 continue;
             }
 
-            if (need_comma && !builder_append(&builder, ",")) {
-                builder_free(&builder);
+            if (need_comma && !json_builder_append(&builder, ",")) {
+                json_builder_free(&builder);
                 pthread_rwlock_unlock(&db->lock);
                 return make_error_result("failed to serialize select separator", start_us);
             }
 
             if (!append_record_json(&builder, &db->records[i])) {
-                builder_free(&builder);
+                json_builder_free(&builder);
                 pthread_rwlock_unlock(&db->lock);
                 return make_error_result("failed to serialize select row", start_us);
             }
@@ -402,14 +290,14 @@ DbResult db_select(DbEngine *db, DbFilter filter)
         }
     }
 
-    if (!builder_append(&builder, "]")) {
-        builder_free(&builder);
+    if (!json_builder_append(&builder, "]")) {
+        json_builder_free(&builder);
         pthread_rwlock_unlock(&db->lock);
         return make_error_result("failed to finalize select result", start_us);
     }
 
     result.ok = true;
-    result.rows_json = builder_take(&builder);
+    result.rows_json = json_builder_take(&builder);
     snprintf(result.message, sizeof(result.message), "selected %zu row(s)", matched);
     result.index_used = filter.type == DB_FILTER_ID;
     result.elapsed_us = now_us() - start_us;

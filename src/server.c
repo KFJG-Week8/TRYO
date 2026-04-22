@@ -49,62 +49,44 @@ static void install_signal_handlers(void)
 
 static char *make_error_body(const char *message)
 {
-    char *escaped = json_escape_dup(message);
-    char *body;
-    int needed;
+    JsonBuilder builder;
 
-    if (escaped == NULL) {
+    if (!json_builder_init(&builder)) {
         return NULL;
     }
 
-    needed = snprintf(NULL, 0, "{\"ok\":false,\"error\":\"%s\"}", escaped);
-    if (needed < 0) {
-        free(escaped);
+    if (!json_builder_append(&builder, "{\"ok\":false,\"error\":") ||
+        !json_builder_append_string(&builder, message) ||
+        !json_builder_append(&builder, "}")) {
+        json_builder_free(&builder);
         return NULL;
     }
 
-    body = malloc((size_t)needed + 1);
-    if (body == NULL) {
-        free(escaped);
-        return NULL;
-    }
-
-    snprintf(body, (size_t)needed + 1, "{\"ok\":false,\"error\":\"%s\"}", escaped);
-    free(escaped);
-    return body;
+    return json_builder_take(&builder);
 }
 
 static char *make_success_body(const DbResult *result)
 {
-    char *escaped_message = json_escape_dup(result->message);
-    char *body;
+    JsonBuilder builder;
     const char *rows = result->rows_json == NULL ? "[]" : result->rows_json;
     const char *index_used = result->index_used ? "true" : "false";
-    int needed;
 
-    if (escaped_message == NULL) {
+    if (!json_builder_init(&builder)) {
         return NULL;
     }
 
-    needed = snprintf(NULL, 0,
-                      "{\"ok\":true,\"rows\":%s,\"message\":\"%s\",\"index_used\":%s,\"elapsed_us\":%lld}",
-                      rows, escaped_message, index_used, result->elapsed_us);
-    if (needed < 0) {
-        free(escaped_message);
+    if (!json_builder_append(&builder, "{\"ok\":true,\"rows\":") ||
+        !json_builder_append(&builder, rows) ||
+        !json_builder_append(&builder, ",\"message\":") ||
+        !json_builder_append_string(&builder, result->message) ||
+        !json_builder_append(&builder, ",\"index_used\":") ||
+        !json_builder_append(&builder, index_used) ||
+        !json_builder_appendf(&builder, ",\"elapsed_us\":%lld}", result->elapsed_us)) {
+        json_builder_free(&builder);
         return NULL;
     }
 
-    body = malloc((size_t)needed + 1);
-    if (body == NULL) {
-        free(escaped_message);
-        return NULL;
-    }
-
-    snprintf(body, (size_t)needed + 1,
-             "{\"ok\":true,\"rows\":%s,\"message\":\"%s\",\"index_used\":%s,\"elapsed_us\":%lld}",
-             rows, escaped_message, index_used, result->elapsed_us);
-    free(escaped_message);
-    return body;
+    return json_builder_take(&builder);
 }
 
 static DbResult execute_statement(DbEngine *db, const SqlStatement *stmt)

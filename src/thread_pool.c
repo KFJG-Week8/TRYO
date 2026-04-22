@@ -34,6 +34,10 @@ static void *worker_loop(void *arg)
 
 int thread_pool_init(ThreadPool *pool, size_t thread_count, size_t queue_capacity, TaskHandler handler, void *context)
 {
+    int mutex_ready = 0;
+    int not_empty_ready = 0;
+    int not_full_ready = 0;
+
     memset(pool, 0, sizeof(*pool));
 
     if (thread_count == 0 || queue_capacity == 0 || handler == NULL) {
@@ -52,13 +56,20 @@ int thread_pool_init(ThreadPool *pool, size_t thread_count, size_t queue_capacit
     pool->handler = handler;
     pool->context = context;
 
-    if (pthread_mutex_init(&pool->mutex, NULL) != 0 ||
-        pthread_cond_init(&pool->not_empty, NULL) != 0 ||
-        pthread_cond_init(&pool->not_full, NULL) != 0) {
-        free(pool->fds);
-        free(pool->threads);
-        return 0;
+    if (pthread_mutex_init(&pool->mutex, NULL) != 0) {
+        goto fail;
     }
+    mutex_ready = 1;
+
+    if (pthread_cond_init(&pool->not_empty, NULL) != 0) {
+        goto fail;
+    }
+    not_empty_ready = 1;
+
+    if (pthread_cond_init(&pool->not_full, NULL) != 0) {
+        goto fail;
+    }
+    not_full_ready = 1;
 
     for (size_t i = 0; i < thread_count; i++) {
         if (pthread_create(&pool->threads[i], NULL, worker_loop, pool) != 0) {
@@ -69,6 +80,21 @@ int thread_pool_init(ThreadPool *pool, size_t thread_count, size_t queue_capacit
     }
 
     return 1;
+
+fail:
+    if (not_full_ready) {
+        pthread_cond_destroy(&pool->not_full);
+    }
+    if (not_empty_ready) {
+        pthread_cond_destroy(&pool->not_empty);
+    }
+    if (mutex_ready) {
+        pthread_mutex_destroy(&pool->mutex);
+    }
+    free(pool->fds);
+    free(pool->threads);
+    memset(pool, 0, sizeof(*pool));
+    return 0;
 }
 
 int thread_pool_submit(ThreadPool *pool, int client_fd)
