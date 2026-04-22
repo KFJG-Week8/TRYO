@@ -1,0 +1,4 @@
+bin/
+*.dSYM/
+data/*.csv
+!data/.gitkeep
