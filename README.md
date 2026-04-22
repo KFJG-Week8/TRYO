@@ -1,6 +1,7 @@
 # WEEK8 미니 DBMS API 서버
 
-C로 구현한 파일 기반 미니 DBMS를 HTTP 요청으로 다룰 수 있는 서버 프로젝트입니다. 외부 클라이언트는 `curl` 같은 HTTP 클라이언트로 SQL을 보내고, 서버는 SQL 처리기와 내부 DB engine을 호출해 `users` 테이블에 `INSERT` 또는 `SELECT`를 수행합니다.
+C로 구현한 파일 기반 미니 DBMS를 HTTP 요청으로 다룰 수 있는 서버 프로젝트입니다. 
+외부 클라이언트는 `curl` 같은 HTTP 클라이언트로 SQL을 보내고, 서버는 SQL 처리기와 내부 DB engine을 호출해 `users` 테이블에 `INSERT` 또는 `SELECT`를 수행합니다.
 
 프로젝트의 핵심은 **외부 API 서버**, **thread pool 기반 병렬 요청 처리**, **멀티 스레드 동시성 제어**, **내부 DB engine 연결**입니다.
 
@@ -27,7 +28,7 @@ flowchart LR
 
 | 요구사항 | 이 프로젝트에서 보여주는 지점 |
 | --- | --- |
-| 구현한 API를 통해 외부 클라이언트에서 DBMS 기능 사용 | `GET /health`, `POST /query`를 HTTP로 호출 |
+| API를 통해 외부 클라이언트에서 DBMS 기능 사용 | `GET /health`, `POST /query`를 HTTP로 호출 |
 | Thread Pool 구성 및 SQL 요청 병렬 처리 | `thread_pool.c`의 고정 worker pool과 fd queue |
 | 이전 SQL 처리기와 B+ tree index 활용 | `sql_parse()`와 `DbEngine.index`를 서버 요청 흐름에 연결 |
 | 멀티 스레드 동시성 이슈 처리 | queue는 mutex/condition variable, DB는 read-write lock |
@@ -76,8 +77,7 @@ flowchart TD
 
 ```text
 main thread는 새 연결을 받는 역할에 집중합니다.
-client_fd는 thread pool queue로 들어가고,
-worker thread가 HTTP 요청 처리, SQL 파싱, DB 실행, 응답 전송까지 담당합니다.
+client_fd는 thread pool queue로 들어가고, worker thread가 HTTP 요청 처리, SQL 파싱, DB 실행, 응답 전송까지 담당합니다.
 ```
 
 ## Thread Pool 구조
