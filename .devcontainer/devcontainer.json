@@ -1,0 +1,23 @@
+{
+  "name": "TRYO Container",
+  "dockerFile": "Dockerfile",
+  "remoteUser": "jungle",
+  "mounts": [
+    "source=D:\\my-vscode-extensions,target=/home/jungle/.vscode-server/extensions,type=bind",
+    "source=C:\\Users\\Runner\\.codex\\skills,target=/home/jungle/.codex/skills,type=bind"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.cpptools-extension-pack", "ms-vscode.cpptools"],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "C_Cpp.default.compilerPath": "/usr/bin/gcc",
+        "C_Cpp.default.includePath": [
+          "/usr/include",
+          "/usr/local/include",
+          "${workspaceFolder}/include"
+        ]
+      }
+    }
+  }
+}
