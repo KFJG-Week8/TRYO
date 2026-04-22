@@ -15,6 +15,7 @@ typedef struct {
 
 int http_read_request(int client_fd, HttpRequest *request, char *err, size_t err_size);
 int http_send_json(int client_fd, int status_code, const char *json_body);
+int http_send_json_with_thread(int client_fd, int status_code, const char *json_body, unsigned long worker_thread_id);
 int http_extract_sql(const char *body, char *sql_out, size_t sql_size, char *err, size_t err_size);
 
 #endif

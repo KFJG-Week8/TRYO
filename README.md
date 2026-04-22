@@ -1,6 +1,6 @@
 # WEEK8 미니 DBMS API 서버
 
-C로 구현한 파일 기반 미니 DBMS를 HTTP 요청으로 다룰 수 있는 서버 프로젝트입니다. 
+C로 구현한 파일 기반 미니 DBMS를 HTTP 요청으로 다룰 수 있는 서버 프로젝트입니다.
 외부 클라이언트는 `curl` 같은 HTTP 클라이언트로 SQL을 보내고, 서버는 SQL 처리기와 내부 DB engine을 호출해 `users` 테이블에 `INSERT` 또는 `SELECT`를 수행합니다.
 
 프로젝트의 핵심은 **외부 API 서버**, **thread pool 기반 병렬 요청 처리**, **멀티 스레드 동시성 제어**, **내부 DB engine 연결**입니다.

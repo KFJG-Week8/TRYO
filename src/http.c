@@ -173,9 +173,17 @@ int http_read_request(int client_fd, HttpRequest *request, char *err, size_t err
 
 int http_send_json(int client_fd, int status_code, const char *json_body)
 {
+    return http_send_json_with_thread(client_fd, status_code, json_body, 0);
+}
+
+int http_send_json_with_thread(int client_fd, int status_code, const char *json_body, unsigned long worker_thread_id)
+{
     const char *reason = "OK";
     char header[512];
+    char thread_header[96] = "";
     size_t body_len = strlen(json_body);
+    int needs_newline = body_len == 0 || json_body[body_len - 1] != '\n';
+    size_t response_body_len = body_len + (needs_newline ? 1 : 0);
     int header_len;
 
     if (status_code == 400) {
@@ -188,20 +196,38 @@ int http_send_json(int client_fd, int status_code, const char *json_body)
         reason = "Internal Server Error";
     }
 
+    if (worker_thread_id != 0) {
+        int thread_header_len = snprintf(thread_header, sizeof(thread_header),
+                                         "X-Worker-Thread-Id: %lu\r\n",
+                                         worker_thread_id);
+        if (thread_header_len < 0 || (size_t)thread_header_len >= sizeof(thread_header)) {
+            return 0;
+        }
+    }
+
     header_len = snprintf(header, sizeof(header),
                           "HTTP/1.1 %d %s\r\n"
                           "Content-Type: application/json\r\n"
+                          "%s"
                           "Content-Length: %zu\r\n"
                           "Connection: close\r\n"
                           "\r\n",
-                          status_code, reason, body_len);
+                          status_code, reason, thread_header, response_body_len);
 
     if (header_len < 0 || (size_t)header_len >= sizeof(header)) {
         return 0;
     }
 
-    return send_all(client_fd, header, (size_t)header_len) &&
-           send_all(client_fd, json_body, body_len);
+    if (!send_all(client_fd, header, (size_t)header_len) ||
+        !send_all(client_fd, json_body, body_len)) {
+        return 0;
+    }
+
+    if (needs_newline && !send_all(client_fd, "\n", 1)) {
+        return 0;
+    }
+
+    return 1;
 }
 
 static int copy_raw_sql(const char *body, char *sql_out, size_t sql_size, char *err, size_t err_size)

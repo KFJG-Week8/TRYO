@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -27,6 +28,11 @@ typedef struct {
 } ServerContext;
 
 static volatile sig_atomic_t g_should_stop = 0;
+
+static unsigned long current_worker_thread_id(void)
+{
+    return (unsigned long)pthread_self();
+}
 
 static void handle_signal(int signo)
 {
@@ -55,33 +61,9 @@ static char *make_error_body(const char *message)
         return NULL;
     }
 
-    if (!json_builder_append(&builder, "{\"ok\":false,\"error\":") ||
+    if (!json_builder_append(&builder, "{\"error\":") ||
         !json_builder_append_string(&builder, message) ||
         !json_builder_append(&builder, "}")) {
-        json_builder_free(&builder);
-        return NULL;
-    }
-
-    return json_builder_take(&builder);
-}
-
-static char *make_success_body(const DbResult *result)
-{
-    JsonBuilder builder;
-    const char *rows = result->rows_json == NULL ? "[]" : result->rows_json;
-    const char *index_used = result->index_used ? "true" : "false";
-
-    if (!json_builder_init(&builder)) {
-        return NULL;
-    }
-
-    if (!json_builder_append(&builder, "{\"ok\":true,\"rows\":") ||
-        !json_builder_append(&builder, rows) ||
-        !json_builder_append(&builder, ",\"message\":") ||
-        !json_builder_append_string(&builder, result->message) ||
-        !json_builder_append(&builder, ",\"index_used\":") ||
-        !json_builder_append(&builder, index_used) ||
-        !json_builder_appendf(&builder, ",\"elapsed_us\":%lld}", result->elapsed_us)) {
         json_builder_free(&builder);
         return NULL;
     }
@@ -137,8 +119,8 @@ static DbResult execute_statement(DbEngine *db, const SqlStatement *stmt)
 
 static void log_request(int client_fd, const HttpRequest *request, const char *detail, long long elapsed_us, int index_used)
 {
-    printf("[thread=%lu fd=%d] %s %s %s elapsed_us=%lld index_used=%s\n",
-           (unsigned long)pthread_self(),
+    printf("request | thread=%lu | fd=%d | %s %s | result=%s | elapsed=%lldus | index_used=%s\n",
+           current_worker_thread_id(),
            client_fd,
            request->method,
            request->path,
@@ -148,16 +130,21 @@ static void log_request(int client_fd, const HttpRequest *request, const char *d
     fflush(stdout);
 }
 
+static int send_json_response(int client_fd, int status_code, const char *body)
+{
+    return http_send_json_with_thread(client_fd, status_code, body, current_worker_thread_id());
+}
+
 static void send_error_response(int client_fd, int status_code, const char *message)
 {
     char *body = make_error_body(message);
 
     if (body == NULL) {
-        http_send_json(client_fd, 500, "{\"ok\":false,\"error\":\"out of memory\"}");
+        send_json_response(client_fd, 500, "{\"error\":\"out of memory\"}");
         return;
     }
 
-    http_send_json(client_fd, status_code, body);
+    send_json_response(client_fd, status_code, body);
     free(body);
 }
 
@@ -167,7 +154,7 @@ static void handle_query(int client_fd, ServerContext *context, const HttpReques
     char err[256];
     SqlStatement stmt;
     DbResult db_result;
-    char *body;
+    const char *rows;
 
     if (!http_extract_sql(request->body, sql, sizeof(sql), err, sizeof(err))) {
         send_error_response(client_fd, 400, err);
@@ -189,17 +176,9 @@ static void handle_query(int client_fd, ServerContext *context, const HttpReques
         return;
     }
 
-    body = make_success_body(&db_result);
-    if (body == NULL) {
-        send_error_response(client_fd, 500, "out of memory");
-        log_request(client_fd, request, "serialize-error", db_result.elapsed_us, db_result.index_used);
-        db_result_free(&db_result);
-        return;
-    }
-
-    http_send_json(client_fd, 200, body);
+    rows = db_result.rows_json == NULL ? "[]" : db_result.rows_json;
+    send_json_response(client_fd, 200, rows);
     log_request(client_fd, request, "ok", db_result.elapsed_us, db_result.index_used);
-    free(body);
     db_result_free(&db_result);
 }
 
@@ -216,7 +195,7 @@ static void handle_client(int client_fd, void *context)
     }
 
     if (strcasecmp(request.method, "GET") == 0 && strcmp(request.path, "/health") == 0) {
-        http_send_json(client_fd, 200, "{\"status\":\"ok\"}");
+        send_json_response(client_fd, 200, "{\"status\":\"ok\"}");
         log_request(client_fd, &request, "ok", 0, 0);
     } else if (strcasecmp(request.method, "POST") == 0 && strcmp(request.path, "/query") == 0) {
         handle_query(client_fd, server_context, &request);
@@ -296,10 +275,13 @@ int server_run(const ServerConfig *config)
         return 1;
     }
 
-    printf("WEEK8 mini DBMS API server listening on http://127.0.0.1:%d with %zu worker threads\n",
-           config->port,
-           config->thread_count);
-    printf("Data file: %s\n", config->data_path);
+    printf("\n------------------------------------------------------------\n");
+    printf("WEEK8 mini DBMS API server\n");
+    printf("------------------------------------------------------------\n");
+    printf("Listening   http://127.0.0.1:%d\n", config->port);
+    printf("Workers     %zu\n", config->thread_count);
+    printf("Data file   %s\n", config->data_path);
+    printf("Stop        Ctrl+C\n");
     fflush(stdout);
 
     while (!g_should_stop) {
@@ -330,6 +312,6 @@ int server_run(const ServerConfig *config)
 
     thread_pool_shutdown(&pool);
     db_destroy(&context.db);
-    printf("Server stopped\n");
+    printf("\nServer stopped\n");
     return 0;
 }
