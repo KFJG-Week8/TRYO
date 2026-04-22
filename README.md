@@ -2,7 +2,7 @@
 
 C로 구현한 파일 기반 미니 DBMS를 HTTP API 서버로 감싼 프로젝트입니다. 외부 클라이언트는 `curl` 같은 HTTP 클라이언트로 SQL을 보내고, 서버는 SQL 처리기와 내부 DB engine을 호출해 `users` 테이블에 `INSERT` 또는 `SELECT`를 수행합니다.
 
-이번 주차의 핵심은 **외부 API 서버**, **thread pool 기반 병렬 요청 처리**, **멀티 스레드 동시성 제어**, **내부 DB engine 연결**입니다.
+프로젝트의 핵심은 B+ 트리 자체 구현 설명이 아니라, **외부 API 서버**, **thread pool 기반 병렬 요청 처리**, **멀티 스레드 동시성 제어**, **내부 DB engine 연결**입니다.
 
 ## 핵심 요약
 
@@ -23,7 +23,7 @@ flowchart LR
     F --> A
 ```
 
-## 이번 주차 요구사항 매핑
+## 구현 범위
 
 | 요구사항 | 이 프로젝트에서 보여주는 지점 |
 | --- | --- |
@@ -72,7 +72,7 @@ flowchart TD
     L --> S["close(client_fd)"]
 ```
 
-읽을 포인트:
+동작 방식 요약:
 
 ```text
 main thread는 새 연결을 받는 역할에 집중합니다.
@@ -293,63 +293,11 @@ make test
 ./bin/week8_dbms [port] [thread_count] [data_file]
 ```
 
-시연용 실행:
+예시 실행:
 
 ```sh
-./bin/week8_dbms 8080 4 data/demo_users.csv
+./bin/week8_dbms 8080 4 data/users.csv
 ```
-
-## 시연 명령
-
-깨끗한 시연 파일 준비:
-
-```sh
-rm -f data/demo_users.csv
-```
-
-서버 실행:
-
-```sh
-./bin/week8_dbms 8080 4 data/demo_users.csv
-```
-
-외부 클라이언트 확인:
-
-```sh
-curl http://127.0.0.1:8080/health
-```
-
-INSERT:
-
-```sh
-curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"INSERT INTO users name age VALUES '\''kim'\'' 20;"}'
-```
-
-SELECT:
-
-```sh
-curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users;"}'
-```
-
-thread pool 병렬 요청 시연:
-
-```sh
-bash scripts/concurrency_demo.sh 8080 40 12
-```
-
-동시 INSERT 결과 확인:
-
-```sh
-curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users WHERE name = '\''parallel40'\'';"}'
-```
-
-더 자세한 시연 순서는 [demo_guide.md](demo_guide.md)를 참고합니다.
 
 ## 테스트 범위
 
@@ -378,20 +326,10 @@ JSON body에서 SQL 추출
 include/          공개 헤더
 src/              구현 코드
 tests/            C 테스트
-scripts/          벤치마크와 데모 보조 스크립트
+scripts/          보조 스크립트
 data/             CSV 데이터 파일
 lessons/          한국어 학습 문서
 ```
-
-## 참고 문서
-
-1. [demo_guide.md](demo_guide.md)
-2. [presentation.md](presentation.md)
-3. [questions.md](questions.md)
-4. [myquestion.md](myquestion.md)
-5. [lessons/README.md](lessons/README.md)
-6. [design.md](design.md)
-7. [requirements.md](requirements.md)
 
 ## 회고
 
