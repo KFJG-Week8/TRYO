@@ -1,59 +1,287 @@
 # WEEK8 미니 DBMS API 서버
 
-C로 구현한 작은 파일 기반 DBMS API 서버입니다. BSD socket으로 HTTP 요청을 받고, JSON body 안의 SQL을 파싱한 뒤, 파일 저장소와 메모리 record 배열, B+ 트리 인덱스를 함께 사용해 `users` 테이블을 조회하거나 삽입합니다.
+C로 구현한 파일 기반 미니 DBMS를 HTTP API 서버로 감싼 프로젝트입니다. 외부 클라이언트는 `curl` 같은 HTTP 클라이언트로 SQL을 보내고, 서버는 SQL 처리기와 내부 DB engine을 호출해 `users` 테이블에 `INSERT` 또는 `SELECT`를 수행합니다.
 
-이 프로젝트는 production용 DB나 HTTP 서버가 아니라, TCP, file descriptor, HTTP framing, thread pool, SQL parser, file-backed storage, B+ tree index가 한 요청 안에서 어떻게 연결되는지 보기 위한 학습용 구현입니다.
+이번 주차의 핵심은 B+ 트리 자체 구현 설명이 아니라, **외부 API 서버**, **thread pool 기반 병렬 요청 처리**, **멀티 스레드 동시성 제어**, **내부 DB engine 연결**입니다.
 
-## 실행 흐름 다이어그램
+## 핵심 요약
+
+```text
+1. 외부 클라이언트가 HTTP API로 DBMS 기능을 사용한다.
+2. main thread는 accept만 담당하고, worker thread들이 SQL 요청을 처리한다.
+3. 여러 worker가 같은 DB engine을 공유하므로 lock으로 동시성 문제를 제어한다.
+4. 이전 차수의 SQL 처리기와 B+ tree index는 내부 DB engine 구성 요소로 재사용한다.
+```
+
+```mermaid
+flowchart LR
+    A["외부 클라이언트<br/>curl / browser / client"] --> B["HTTP API Server"]
+    B --> C["Thread Pool<br/>worker threads"]
+    C --> D["SQL Parser<br/>SqlStatement"]
+    D --> E["DB Engine<br/>file + records + index"]
+    E --> F["JSON Response"]
+    F --> A
+```
+
+## 이번 주차 요구사항 매핑
+
+| 요구사항 | 이 프로젝트에서 보여주는 지점 |
+| --- | --- |
+| 구현한 API를 통해 외부 클라이언트에서 DBMS 기능 사용 | `GET /health`, `POST /query`를 HTTP로 호출 |
+| Thread Pool 구성 및 SQL 요청 병렬 처리 | `thread_pool.c`의 고정 worker pool과 fd queue |
+| 이전 SQL 처리기와 B+ tree index 활용 | `sql_parse()`와 `DbEngine.index`를 서버 요청 흐름에 연결 |
+| 멀티 스레드 동시성 이슈 처리 | queue는 mutex/condition variable, DB는 read-write lock |
+| 내부 DB 엔진과 외부 API 서버 연결 설계 | HTTP body의 SQL -> `SqlStatement` -> `DbResult` -> JSON |
+| API 서버 아키텍처 | socket accept loop, routing, worker dispatch, JSON response |
+
+## 실행 흐름
 
 ```mermaid
 flowchart TD
-    A["클라이언트 curl/browser"] -->|"TCP connect"| B["listening socket"]
-    B --> C["accept()로 client fd 생성"]
-    C --> D["thread_pool_submit()"]
-    D --> E["worker thread가 fd dequeue"]
-    E --> F["http_read_request()"]
-    F --> G{"route"}
-    G -->|GET /health| H["health JSON 응답"]
-    G -->|POST /query| I["http_extract_sql()"]
-    I --> J["sql_parse() -> SqlStatement"]
-    J --> K["execute_statement()"]
-    K --> L{"SQL 종류"}
-    L -->|INSERT| M["db_insert(): 파일 append + 메모리 record + B+ tree 갱신"]
-    L -->|SELECT id| N["db_select(): B+ tree로 record index 검색"]
-    L -->|SELECT name/all| O["db_select(): record 배열 선형 탐색"]
-    M --> P["JSON 응답 생성"]
-    N --> P
-    O --> P
-    H --> Q["http_send_json()"]
-    P --> Q
-    Q --> R["client fd close"]
+    A["server_run()"] --> B["db_init()"]
+    B --> B1["data file load"]
+    B1 --> B2["records 배열 복구"]
+    B2 --> B3["B+ tree index 복구"]
+
+    A --> C["thread_pool_init()"]
+    C --> C1["worker thread 생성"]
+    C1 --> C2["fd queue 대기"]
+
+    A --> D["create_listen_socket()"]
+    D --> D1["socket()"]
+    D1 --> D2["bind()"]
+    D2 --> D3["listen()"]
+
+    D3 --> E["accept loop"]
+    E --> F["accept()로 client_fd 생성"]
+    F --> G["thread_pool_submit(client_fd)"]
+    G --> H["worker가 client_fd dequeue"]
+    H --> I["http_read_request()"]
+    I --> J{"route"}
+
+    J --> K["GET /health"]
+    K --> L["http_send_json()"]
+
+    J --> M["POST /query"]
+    M --> N["http_extract_sql()"]
+    N --> O["sql_parse()"]
+    O --> P["execute_statement()"]
+    P --> Q["db_insert() / db_select()"]
+    Q --> R["make JSON body"]
+    R --> L
+    L --> S["close(client_fd)"]
 ```
 
-## 이전 SQL 처리기 + B+ 트리 이후 달라진 점
+읽을 포인트:
 
-이전 단계가 “SQL 문자열을 구조체로 바꾸고, `id -> record index`를 B+ 트리로 찾을 수 있다”까지였다면, 현재 코드는 그 위에 실제 서버 실행 흐름을 얹었습니다.
+```text
+main thread는 새 연결을 받는 역할에 집중합니다.
+client_fd는 thread pool queue로 들어가고,
+worker thread가 HTTP 요청 처리, SQL 파싱, DB 실행, 응답 전송까지 담당합니다.
+```
 
-| 추가된 지점 | 달라진 점 |
+## Thread Pool 구조
+
+```mermaid
+flowchart TD
+    A["main thread<br/>accept()"] --> B["thread_pool_submit()"]
+    B --> C["bounded fd queue"]
+
+    C --> D["worker 1"]
+    C --> E["worker 2"]
+    C --> F["worker 3"]
+    C --> G["worker 4"]
+
+    D --> H["handle_client()"]
+    E --> H
+    F --> H
+    G --> H
+
+    H --> I["HTTP parse"]
+    I --> J["SQL parse"]
+    J --> K["DB execute"]
+    K --> L["JSON response"]
+```
+
+thread pool이 해결하는 문제:
+
+```text
+요청이 들어올 때마다 새 thread를 계속 만들지 않는다.
+고정된 worker thread들이 queue에서 client_fd를 꺼내 처리한다.
+main thread가 긴 요청 처리 때문에 accept를 못 하는 상황을 줄인다.
+```
+
+## 동시성 제어
+
+이 프로젝트에는 공유 자원이 두 종류 있습니다.
+
+```mermaid
+flowchart TD
+    A["공유 자원 1<br/>thread pool fd queue"] --> B["head / tail / count / fds"]
+    B --> C["pthread_mutex_t"]
+    B --> D["not_empty / not_full condition variable"]
+
+    E["공유 자원 2<br/>DbEngine"] --> F["records 배열"]
+    E --> G["next_id / count"]
+    E --> H["data file"]
+    E --> I["B+ tree index"]
+    F --> J["pthread_rwlock_t"]
+    G --> J
+    H --> J
+    I --> J
+```
+
+queue 동시성:
+
+```text
+main thread는 client_fd를 queue에 넣고,
+worker thread들은 queue에서 client_fd를 꺼냅니다.
+
+head, tail, count를 여러 thread가 동시에 바꾸면 queue가 깨질 수 있으므로 mutex로 보호합니다.
+queue가 비어 있으면 worker는 not_empty에서 기다리고,
+queue가 가득 차면 submit 쪽은 not_full에서 기다립니다.
+```
+
+DB 동시성:
+
+```text
+SELECT는 read lock을 잡습니다.
+여러 SELECT는 동시에 실행될 수 있습니다.
+
+INSERT는 write lock을 잡습니다.
+INSERT는 파일 append, records 배열 추가, next_id 증가, B+ tree 갱신을 함께 수행하므로 혼자 실행되어야 합니다.
+```
+
+```mermaid
+flowchart LR
+    A["SELECT"] --> B["read lock"]
+    C["SELECT"] --> B
+    B --> D["동시에 읽기 가능"]
+
+    E["INSERT"] --> F["write lock"]
+    F --> G["혼자 DB 변경"]
+
+    D -. "INSERT는 대기" .-> F
+    G -. "SELECT/INSERT 대기" .-> B
+```
+
+## API와 DB Engine 연결
+
+```mermaid
+sequenceDiagram
+    participant Client as "External Client"
+    participant API as "API Server"
+    participant SQL as "SQL Parser"
+    participant DB as "DB Engine"
+
+    Client->>API: POST /query {"sql":"INSERT ..."}
+    API->>API: http_extract_sql()
+    API->>SQL: sql_parse(sql)
+    SQL-->>API: SqlStatement
+    API->>DB: db_insert() or db_select()
+    DB-->>API: DbResult
+    API-->>Client: JSON response
+```
+
+설계 포인트:
+
+```text
+API 서버는 HTTP와 routing을 담당합니다.
+SQL parser는 문자열 검증과 구조화를 담당합니다.
+DB engine은 파일, 메모리 records, B+ tree index, lock을 담당합니다.
+
+DB engine은 HTTP request나 JSON body를 모릅니다.
+이 덕분에 API 계층과 DB 계층의 책임이 분리됩니다.
+```
+
+## 주요 모듈
+
+| 파일 | 책임 |
 | --- | --- |
-| HTTP API 계층 | `GET /health`, `POST /query`로 외부 클라이언트가 SQL을 보낼 수 있습니다. |
-| TCP/socket 실행 루프 | `socket() -> bind() -> listen() -> accept()` 흐름으로 실제 client fd를 받습니다. |
-| thread pool | main thread는 연결을 받고, worker thread가 요청 처리와 DB 실행을 맡습니다. |
-| JSON 요청/응답 | 요청 body에서 `"sql"` 값을 추출하고, 결과를 JSON으로 직렬화합니다. |
-| 파일 기반 저장 | `INSERT`가 `data/users.csv`에 append되고, 재시작 시 파일에서 record와 index를 복구합니다. |
-| 동시성 제어 | DB engine이 `pthread_rwlock_t`로 SELECT는 read lock, INSERT는 write lock을 사용합니다. |
-| 성능 관찰 값 | 응답과 로그에 `index_used`, `elapsed_us`가 포함되어 index 조회와 선형 탐색을 비교할 수 있습니다. |
-| 벤치마크 스크립트 | `scripts/benchmark.sh`로 indexed lookup과 linear scan을 비교할 수 있습니다. |
-| 코드 리팩터링 | JSON 문자열 생성 로직을 `util` 공통 `JsonBuilder`로 정리해 DB 결과와 서버 응답이 같은 경로를 사용합니다. |
-| 문서 정리 | 중복 학습 문서를 `lessons/00_top_down_analysis_koh.md`로 흡수하고 README를 한국어로 정리했습니다. |
+| `src/main.c` | CLI 인자를 읽고 `ServerConfig` 생성 |
+| `src/server.c` | socket 생성, accept loop, routing, request logging |
+| `src/thread_pool.c` | worker thread pool과 bounded fd queue |
+| `src/http.c` | HTTP request 읽기, JSON response 전송, SQL JSON 추출 |
+| `src/sql.c` | 지원 SQL을 `SqlStatement`로 파싱 |
+| `src/db.c` | file-backed users table, records 배열, lock, DB 실행 |
+| `src/bptree.c` | `id -> record index` B+ tree index |
+| `src/util.c` | JSON builder, escaping, 시간 측정 |
 
-## 빌드
+## 지원 API
+
+### `GET /health`
+
+서버 상태 확인용 API입니다.
+
+```sh
+curl http://127.0.0.1:8080/health
+```
+
+예상 응답:
+
+```json
+{"status":"ok"}
+```
+
+### `POST /query`
+
+SQL 실행 API입니다.
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/query \
+  -H 'Content-Type: application/json' \
+  --data '{"sql":"INSERT INTO users name age VALUES '\''kim'\'' 20;"}'
+```
+
+성공 응답 예시:
+
+```json
+{"ok":true,"rows":[{"id":1,"name":"kim","age":20}],"message":"inserted 1 row","index_used":false,"elapsed_us":100}
+```
+
+실패 응답 예시:
+
+```json
+{"ok":false,"error":"only INSERT and SELECT are supported"}
+```
+
+## 지원 SQL
+
+```sql
+INSERT INTO users name age VALUES 'kim' 20;
+SELECT * FROM users;
+SELECT * FROM users WHERE id = 1;
+SELECT * FROM users WHERE name = 'kim';
+```
+
+범위 밖:
+
+```text
+CREATE TABLE
+UPDATE
+DELETE
+JOIN
+복잡한 WHERE 조건
+transaction / rollback
+production-grade HTTP parser
+production-grade JSON parser
+```
+
+## 빌드와 실행
+
+빌드:
 
 ```sh
 make
 ```
 
-## 실행
+테스트:
+
+```sh
+make test
+```
+
+서버 실행:
 
 ```sh
 ./bin/week8_dbms
@@ -65,21 +293,33 @@ make
 ./bin/week8_dbms [port] [thread_count] [data_file]
 ```
 
-예시:
+시연용 실행:
 
 ```sh
-./bin/week8_dbms 8080 4 data/users.csv
+./bin/week8_dbms 8080 4 data/demo_users.csv
 ```
 
-## API 테스트
+## 시연 명령
 
-서버 상태 확인:
+깨끗한 시연 파일 준비:
+
+```sh
+rm -f data/demo_users.csv
+```
+
+서버 실행:
+
+```sh
+./bin/week8_dbms 8080 4 data/demo_users.csv
+```
+
+외부 클라이언트 확인:
 
 ```sh
 curl http://127.0.0.1:8080/health
 ```
 
-row 삽입:
+INSERT:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
@@ -87,7 +327,7 @@ curl -s -X POST http://127.0.0.1:8080/query \
   --data '{"sql":"INSERT INTO users name age VALUES '\''kim'\'' 20;"}'
 ```
 
-전체 조회:
+SELECT:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
@@ -95,53 +335,41 @@ curl -s -X POST http://127.0.0.1:8080/query \
   --data '{"sql":"SELECT * FROM users;"}'
 ```
 
-인덱스 조회:
+thread pool 병렬 요청 시연:
+
+```sh
+bash scripts/concurrency_demo.sh 8080 40 12
+```
+
+동시 INSERT 결과 확인:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
   -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users WHERE id = 1;"}'
+  --data '{"sql":"SELECT * FROM users WHERE name = '\''parallel40'\'';"}'
 ```
 
-선형 탐색 조회:
+더 자세한 시연 순서는 [demo_guide.md](demo_guide.md)를 참고합니다.
 
-```sh
-curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users WHERE name = '\''kim'\'';"}'
+## 테스트 범위
+
+`make test`는 다음을 검증합니다.
+
+```text
+SQL parser
+지원하지 않는 SQL 거부
+B+ tree 삽입과 검색
+DB insert/select/reload
+JSON body에서 SQL 추출
 ```
 
-## 테스트
+추가하면 좋은 테스트:
 
-```sh
-make test
-```
-
-테스트 범위:
-
-- 지원 SQL 파싱
-- 지원하지 않는 SQL 거부
-- B+ 트리 삽입과 검색
-- 파일 기반 DB의 insert/select/reload 동작
-- JSON body에서 SQL 추출
-
-## 벤치마크
-
-서버를 먼저 실행한 뒤 다음 명령을 실행합니다.
-
-```sh
-bash scripts/benchmark.sh 8080 1000
-```
-
-이 스크립트는 샘플 사용자를 삽입하고, 동시 요청을 보낸 뒤 `WHERE id` 인덱스 조회와 `WHERE name` 선형 탐색을 비교합니다.
-
-## 지원 SQL
-
-```sql
-INSERT INTO users name age VALUES 'kim' 20;
-SELECT * FROM users;
-SELECT * FROM users WHERE id = 1;
-SELECT * FROM users WHERE name = 'kim';
+```text
+동시 INSERT stress test
+서버 통합 테스트
+잘못된 HTTP request 테스트
+파일 append 실패 시나리오
 ```
 
 ## 폴더 구조
@@ -155,10 +383,25 @@ data/             CSV 데이터 파일
 lessons/          한국어 학습 문서
 ```
 
-## 읽기 순서
+## 참고 문서
 
-1. [lessons/00_top_down_analysis_koh.md](lessons/00_top_down_analysis_koh.md)
-2. [lessons/README.md](lessons/README.md)
-3. [lessons/03_code_reading/README.md](lessons/03_code_reading/README.md)
-4. [design.md](design.md)
-5. [requirements.md](requirements.md)
+1. [demo_guide.md](demo_guide.md)
+2. [presentation.md](presentation.md)
+3. [questions.md](questions.md)
+4. [myquestion.md](myquestion.md)
+5. [lessons/README.md](lessons/README.md)
+6. [design.md](design.md)
+7. [requirements.md](requirements.md)
+
+## 회고
+
+### 팀원 1
+
+
+### 팀원 2
+
+
+### 팀원 3
+
+
+### 팀원 4
