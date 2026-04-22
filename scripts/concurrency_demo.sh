@@ -23,10 +23,11 @@ echo
 echo "Sending ${COUNT} INSERT requests with parallelism ${PARALLEL}..."
 seq 1 "${COUNT}" | xargs -P "${PARALLEL}" -I{} sh -c '
   i="$1"
+  id=$((10000 + i))
   age=$((20 + (i % 10)))
   curl -s -X POST "${BASE_URL}/query" \
-    -H "Content-Type: application/json" \
-    --data "{\"sql\":\"INSERT INTO users name age VALUES '\''parallel${i}'\'' ${age};\"}"
+    -H "Content-Type: text/plain" \
+    --data "INSERT INTO users VALUES (${id}, '\''parallel${i}'\'', ${age});"
   printf "\n"
 ' _ {} > "${TMP_FILE}"
 

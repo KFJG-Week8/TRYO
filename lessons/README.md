@@ -21,7 +21,7 @@ HTTP 요청으로 들어온 SQL 문자열을 읽는다.
 5. accept()로 얻은 client fd를 worker에게 넘긴다.
 6. worker가 HTTP request의 경계를 찾아 method, path, body를 만든다.
 7. route에 따라 health 응답을 보내거나 SQL query를 처리한다.
-8. JSON body에서 sql 문자열을 꺼낸다.
+8. raw SQL body 또는 호환용 JSON body에서 SQL 문자열을 꺼낸다.
 9. SQL 문자열을 SqlStatement 구조체로 바꾼다.
 10. SqlStatement를 DbFilter 또는 INSERT 작업으로 바꿔 DB engine을 호출한다.
 11. DB engine이 파일, 메모리 배열, B+ 트리, lock을 함께 사용한다.
@@ -862,7 +862,7 @@ while (used < total_needed) {
   chunked transfer
   keep-alive
   header 전체 모델링
-  완전한 JSON parser
+  완전한 SQL parser
 ```
 
 ### `recv`
@@ -963,7 +963,7 @@ base
 
 ```text
 모든 HTTP 요청이 SQL 실행은 아닙니다.
-path와 method를 먼저 보고, POST /query일 때만 body에서 sql 값을 꺼냅니다.
+path와 method를 먼저 보고, POST /query일 때만 body에서 SQL 문자열을 꺼냅니다.
 ```
 
 사용 코드:
@@ -1009,7 +1009,7 @@ s1, s2
 해결하려는 문제:
 
 ```text
-요청 body에서 "sql" key의 문자열 값을 꺼냅니다.
+요청 body가 raw SQL이면 그대로 복사하고, `{`로 시작하면 호환용 JSON body의 `"sql"` 값을 꺼냅니다.
 ```
 
 사용 코드:
@@ -1017,18 +1017,19 @@ s1, s2
 ```c
 if (!http_extract_sql(request->body, sql, sizeof(sql), err, sizeof(err))) {
     send_error_response(client_fd, 400, err);
-    log_request(client_fd, request, "bad-json", 0, 0);
+    log_request(client_fd, request, "bad-body", 0, 0);
     return;
 }
 ```
 
-이 함수는 프로젝트 코드입니다. 완전한 JSON parser가 아니라 이 서버가 받는 요청 형태만 처리합니다.
+이 함수는 프로젝트 코드입니다. 기본 입력은 SQL 문장 그대로이고, 기존 JSON 방식은 호환용으로 남겨 둔 것입니다.
 
-```json
-{"sql":"SELECT * FROM users WHERE id = 1;"}
+```sql
+INSERT INTO users VALUES (1, 'bumsang', 25);
+SELECT id, name FROM users;
 ```
 
-지원하는 escape는 `"`, `\`, `/`, `\n`, `\r`, `\t`입니다. 그 밖의 escape가 나오면 400 응답을 보냅니다.
+JSON body를 보낼 때만 `"`, `\`, `/`, `\n`, `\r`, `\t` escape를 처리합니다. 그 밖의 JSON escape가 나오면 400 응답을 보냅니다.
 
 ## 9. SQL text를 SqlStatement로 바꾼다
 
@@ -1052,8 +1053,10 @@ if (!sql_parse(sql, &stmt, err, sizeof(err))) {
 지원 SQL:
 
 ```sql
+INSERT INTO users VALUES (1, 'bumsang', 25);
 INSERT INTO users name age VALUES 'kim' 20;
 SELECT * FROM users;
+SELECT id, name FROM users;
 SELECT * FROM users WHERE id = 1;
 SELECT * FROM users WHERE name = 'kim';
 ```
@@ -1064,8 +1067,13 @@ SELECT * FROM users WHERE name = 'kim';
 type
   SQL_INSERT 또는 SQL_SELECT입니다.
 
-insert_name, insert_age
+insert_has_id, insert_id, insert_name, insert_age
   INSERT에서 새 record를 만들 값입니다.
+  VALUES(id, name, age) 형태면 입력 id를 사용하고,
+  기존 name age 문법이면 DB가 next_id를 사용합니다.
+
+select_all, select_columns, select_column_count
+  SELECT *인지, 아니면 id/name/age 중 어떤 컬럼만 응답할지 나타냅니다.
 
 where_type
   SELECT에서 필터 종류를 나타냅니다.
@@ -1783,32 +1791,40 @@ row 삽입:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"INSERT INTO users name age VALUES '\''kim'\'' 20;"}'
+  -H 'Content-Type: text/plain' \
+  --data "INSERT INTO users VALUES (1, 'kim', 20);"
 ```
 
 전체 조회:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users;"}'
+  -H 'Content-Type: text/plain' \
+  --data "SELECT * FROM users;"
+```
+
+컬럼 조회:
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/query \
+  -H 'Content-Type: text/plain' \
+  --data "SELECT id, name FROM users;"
 ```
 
 인덱스 조회:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users WHERE id = 1;"}'
+  -H 'Content-Type: text/plain' \
+  --data "SELECT * FROM users WHERE id = 1;"
 ```
 
 선형 탐색 조회:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users WHERE name = '\''kim'\'';"}'
+  -H 'Content-Type: text/plain' \
+  --data "SELECT id, name FROM users WHERE name = 'kim';"
 ```
 
 테스트:

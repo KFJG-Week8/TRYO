@@ -113,6 +113,86 @@ static int parse_string_literal(const char **p, char *out, size_t out_size)
     return 1;
 }
 
+static int parse_column_name(const char **p, SqlColumn *column)
+{
+    char word[32];
+
+    if (!read_word(p, word, sizeof(word))) {
+        return 0;
+    }
+
+    if (strcasecmp(word, "id") == 0) {
+        *column = SQL_COLUMN_ID;
+        return 1;
+    }
+
+    if (strcasecmp(word, "name") == 0) {
+        *column = SQL_COLUMN_NAME;
+        return 1;
+    }
+
+    if (strcasecmp(word, "age") == 0) {
+        *column = SQL_COLUMN_AGE;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int column_already_selected(const SqlStatement *stmt, SqlColumn column)
+{
+    for (size_t i = 0; i < stmt->select_column_count; i++) {
+        if (stmt->select_columns[i] == column) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int parse_select_columns(const char **p, SqlStatement *stmt, char *err, size_t err_size)
+{
+    const char *cur = skip_ws(*p);
+
+    stmt->select_all = 0;
+    stmt->select_column_count = 0;
+
+    if (*cur == '*') {
+        stmt->select_all = 1;
+        *p = cur + 1;
+        return 1;
+    }
+
+    while (1) {
+        SqlColumn column;
+
+        if (stmt->select_column_count >= SQL_MAX_SELECT_COLUMNS) {
+            set_err(err, err_size, "too many SELECT columns");
+            return 0;
+        }
+
+        if (!parse_column_name(p, &column)) {
+            set_err(err, err_size, "expected SELECT column: id, name, or age");
+            return 0;
+        }
+
+        if (column_already_selected(stmt, column)) {
+            set_err(err, err_size, "duplicate SELECT column");
+            return 0;
+        }
+
+        stmt->select_columns[stmt->select_column_count++] = column;
+
+        cur = skip_ws(*p);
+        if (*cur != ',') {
+            break;
+        }
+        *p = cur + 1;
+    }
+
+    return stmt->select_column_count > 0;
+}
+
 static int at_statement_end(const char *p)
 {
     p = skip_ws(p);
@@ -123,9 +203,59 @@ static int at_statement_end(const char *p)
     return *p == '\0';
 }
 
+static int parse_insert_values_with_id(const char **p, SqlStatement *stmt, char *err, size_t err_size)
+{
+    int id;
+
+    if (!expect_symbol(p, '(')) {
+        set_err(err, err_size, "expected '(' after VALUES");
+        return 0;
+    }
+
+    if (!parse_int_value(p, &id) || id <= 0) {
+        set_err(err, err_size, "expected positive id");
+        return 0;
+    }
+
+    if (!expect_symbol(p, ',')) {
+        set_err(err, err_size, "expected comma after id");
+        return 0;
+    }
+
+    if (!parse_string_literal(p, stmt->insert_name, sizeof(stmt->insert_name))) {
+        set_err(err, err_size, "expected single-quoted name");
+        return 0;
+    }
+
+    if (!expect_symbol(p, ',')) {
+        set_err(err, err_size, "expected comma after name");
+        return 0;
+    }
+
+    if (!parse_int_value(p, &stmt->insert_age)) {
+        set_err(err, err_size, "expected non-negative age");
+        return 0;
+    }
+
+    if (!expect_symbol(p, ')')) {
+        set_err(err, err_size, "expected ')' after VALUES");
+        return 0;
+    }
+
+    if (!at_statement_end(*p)) {
+        set_err(err, err_size, "unexpected trailing tokens");
+        return 0;
+    }
+
+    stmt->insert_has_id = 1;
+    stmt->insert_id = id;
+    return 1;
+}
+
 static int parse_insert(const char *sql, SqlStatement *stmt, char *err, size_t err_size)
 {
     const char *p = sql;
+    const char *after_table;
     char col1[32];
     char col2[32];
 
@@ -139,9 +269,21 @@ static int parse_insert(const char *sql, SqlStatement *stmt, char *err, size_t e
         return 0;
     }
 
+    after_table = p;
+
+    if (expect_keyword(&p, "VALUES")) {
+        if (!parse_insert_values_with_id(&p, stmt, err, err_size)) {
+            return 0;
+        }
+        stmt->type = SQL_INSERT;
+        snprintf(stmt->table, sizeof(stmt->table), "users");
+        return 1;
+    }
+
+    p = after_table;
     if (!read_word(&p, col1, sizeof(col1)) || !read_word(&p, col2, sizeof(col2)) ||
         strcasecmp(col1, "name") != 0 || strcasecmp(col2, "age") != 0) {
-        set_err(err, err_size, "expected columns: name age");
+        set_err(err, err_size, "expected VALUES (id, 'name', age) or columns: name age");
         return 0;
     }
 
@@ -166,6 +308,7 @@ static int parse_insert(const char *sql, SqlStatement *stmt, char *err, size_t e
     }
 
     stmt->type = SQL_INSERT;
+    stmt->insert_has_id = 0;
     snprintf(stmt->table, sizeof(stmt->table), "users");
     return 1;
 }
@@ -175,8 +318,17 @@ static int parse_select(const char *sql, SqlStatement *stmt, char *err, size_t e
     const char *p = sql;
     char column[32];
 
-    if (!expect_keyword(&p, "SELECT") || !expect_symbol(&p, '*') || !expect_keyword(&p, "FROM")) {
-        set_err(err, err_size, "expected SELECT * FROM");
+    if (!expect_keyword(&p, "SELECT")) {
+        set_err(err, err_size, "expected SELECT");
+        return 0;
+    }
+
+    if (!parse_select_columns(&p, stmt, err, err_size)) {
+        return 0;
+    }
+
+    if (!expect_keyword(&p, "FROM")) {
+        set_err(err, err_size, "expected FROM");
         return 0;
     }
 

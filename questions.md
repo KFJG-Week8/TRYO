@@ -31,7 +31,7 @@
 21. `Content-Length`가 없거나 잘못된 경우 어떤 문제가 생기고, 현재 코드는 어떻게 처리하나요?
 22. request header나 body가 너무 클 때 현재 코드는 어떻게 방어하나요?
 23. `recv()`가 한 번에 전체 request를 주지 않을 수 있는데, 현재 코드는 이를 어떻게 처리하나요?
-24. `http_extract_sql()`은 완전한 JSON parser가 아닌데, 어떤 입력 범위까지만 처리하나요?
+24. `http_extract_sql()`은 raw SQL body와 호환용 JSON body를 어떻게 구분하나요?
 25. route가 없거나 method가 맞지 않을 때 각각 어떤 HTTP status를 반환하나요?
 26. “예외 처리가 잘 되어 있다”고 말하려면 현재 코드에서 구체적으로 어떤 실패 케이스들을 처리한다고 설명할 수 있나요?
 
@@ -41,10 +41,10 @@
 28. 왜 SQL 문자열을 바로 DB engine에 넘기지 않고 `SqlStatement`로 바꾸나요?
 29. `SqlStatement`, `DbFilter`, `DbResult`는 각각 어떤 역할을 하나요?
 30. `execute_statement()`는 API 서버와 DB engine 사이에서 어떤 어댑터 역할을 하나요?
-31. DB engine이 HTTP request나 JSON body를 직접 알지 못하게 설계한 이유는 무엇인가요?
+31. DB engine이 HTTP request나 body 형식을 직접 알지 못하게 설계한 이유는 무엇인가요?
 32. 지원하지 않는 SQL이 들어오면 어떤 흐름으로 실패 응답이 만들어지나요?
-33. `INSERT INTO users name age VALUES 'kim' 20;`처럼 제한된 SQL 문법만 지원하는 이유를 어떻게 설명하겠나요?
-34. 다른 팀이 SQL parser 없이 JSON 필드로 직접 insert/select를 구현했다면, 이 프로젝트의 SQL parser 기반 설계는 어떤 장단점이 있나요?
+33. `INSERT INTO users VALUES (1, 'bumsang', 25);`와 기존 `INSERT INTO users name age VALUES 'kim' 20;`를 둘 다 지원하는 이유는 무엇인가요?
+34. `SELECT id, name FROM users;`처럼 컬럼 projection을 지원할 때 `SqlStatement`와 `DbProjection`은 각각 어떤 역할을 하나요?
 
 ## DB 저장소와 B+ 트리 인덱스
 

@@ -92,11 +92,16 @@ static char *make_success_body(const DbResult *result)
 static DbResult execute_statement(DbEngine *db, const SqlStatement *stmt)
 {
     if (stmt->type == SQL_INSERT) {
+        if (stmt->insert_has_id) {
+            return db_insert_with_id(db, stmt->insert_id, stmt->insert_name, stmt->insert_age);
+        }
         return db_insert(db, stmt->insert_name, stmt->insert_age);
     }
 
     DbFilter filter;
+    DbProjection projection;
     memset(&filter, 0, sizeof(filter));
+    memset(&projection, 0, sizeof(projection));
 
     if (stmt->where_type == SQL_WHERE_ID) {
         filter.type = DB_FILTER_ID;
@@ -108,7 +113,26 @@ static DbResult execute_statement(DbEngine *db, const SqlStatement *stmt)
         filter.type = DB_FILTER_ALL;
     }
 
-    return db_select(db, filter);
+    if (stmt->select_all) {
+        projection.include_id = true;
+        projection.include_name = true;
+        projection.include_age = true;
+    } else {
+        for (size_t i = 0; i < stmt->select_column_count; i++) {
+            if (stmt->select_columns[i] == SQL_COLUMN_ID) {
+                projection.include_id = true;
+                projection.columns[projection.column_count++] = DB_COLUMN_ID;
+            } else if (stmt->select_columns[i] == SQL_COLUMN_NAME) {
+                projection.include_name = true;
+                projection.columns[projection.column_count++] = DB_COLUMN_NAME;
+            } else if (stmt->select_columns[i] == SQL_COLUMN_AGE) {
+                projection.include_age = true;
+                projection.columns[projection.column_count++] = DB_COLUMN_AGE;
+            }
+        }
+    }
+
+    return db_select_projected(db, filter, projection);
 }
 
 static void log_request(int client_fd, const HttpRequest *request, const char *detail, long long elapsed_us, int index_used)
@@ -147,7 +171,7 @@ static void handle_query(int client_fd, ServerContext *context, const HttpReques
 
     if (!http_extract_sql(request->body, sql, sizeof(sql), err, sizeof(err))) {
         send_error_response(client_fd, 400, err);
-        log_request(client_fd, request, "bad-json", 0, 0);
+        log_request(client_fd, request, "bad-body", 0, 0);
         return;
     }
 

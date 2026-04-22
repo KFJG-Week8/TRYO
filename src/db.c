@@ -2,6 +2,7 @@
 
 #include "util.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,15 +65,83 @@ static int name_is_valid(const char *name)
     return 1;
 }
 
-static int append_record_json(JsonBuilder *builder, const Record *record)
+static DbProjection all_columns_projection(void)
 {
-    return json_builder_append(builder, "{\"id\":") &&
-           json_builder_appendf(builder, "%d", record->id) &&
-           json_builder_append(builder, ",\"name\":") &&
-           json_builder_append_string(builder, record->name) &&
-           json_builder_append(builder, ",\"age\":") &&
-           json_builder_appendf(builder, "%d", record->age) &&
-           json_builder_append(builder, "}");
+    DbProjection projection;
+
+    projection.include_id = true;
+    projection.include_name = true;
+    projection.include_age = true;
+    projection.column_count = 0;
+    return projection;
+}
+
+static int append_json_separator(JsonBuilder *builder, int *need_comma)
+{
+    if (*need_comma && !json_builder_append(builder, ",")) {
+        return 0;
+    }
+
+    *need_comma = 1;
+    return 1;
+}
+
+static int append_record_field_json(JsonBuilder *builder, const Record *record, DbColumn column, int *need_comma)
+{
+    if (!append_json_separator(builder, need_comma)) {
+        return 0;
+    }
+
+    if (column == DB_COLUMN_ID) {
+        return json_builder_append(builder, "\"id\":") &&
+               json_builder_appendf(builder, "%d", record->id);
+    }
+
+    if (column == DB_COLUMN_NAME) {
+        return json_builder_append(builder, "\"name\":") &&
+               json_builder_append_string(builder, record->name);
+    }
+
+    return json_builder_append(builder, "\"age\":") &&
+           json_builder_appendf(builder, "%d", record->age);
+}
+
+static int append_record_json(JsonBuilder *builder, const Record *record, DbProjection projection)
+{
+    int need_comma = 0;
+
+    if (!json_builder_append(builder, "{")) {
+        return 0;
+    }
+
+    if (projection.column_count > 0) {
+        for (size_t i = 0; i < projection.column_count; i++) {
+            if (!append_record_field_json(builder, record, projection.columns[i], &need_comma)) {
+                return 0;
+            }
+        }
+        return json_builder_append(builder, "}");
+    }
+
+    if (projection.include_id) {
+        if (!append_record_field_json(builder, record, DB_COLUMN_ID, &need_comma)) {
+            return 0;
+        }
+    }
+
+    if (projection.include_name) {
+        if (!append_record_field_json(builder, record, DB_COLUMN_NAME, &need_comma)) {
+            return 0;
+        }
+    }
+
+    if (projection.include_age) {
+        if (!append_record_field_json(builder, record, DB_COLUMN_AGE, &need_comma)) {
+            return 0;
+        }
+    }
+
+    return json_builder_append(builder, "}");
 }
 
 static int load_record(DbEngine *db, const Record *record)
@@ -167,7 +236,7 @@ void db_destroy(DbEngine *db)
     pthread_rwlock_destroy(&db->lock);
 }
 
-DbResult db_insert(DbEngine *db, const char *name, int age)
+static DbResult db_insert_internal(DbEngine *db, int has_id, int id, const char *name, int age)
 {
     long long start_us = now_us();
     DbResult result;
@@ -180,9 +249,18 @@ DbResult db_insert(DbEngine *db, const char *name, int age)
         return make_error_result("failed to acquire write lock", start_us);
     }
 
-    if (age < 0 || !name_is_valid(name)) {
+    if ((has_id && id <= 0) || age < 0 || !name_is_valid(name)) {
         pthread_rwlock_unlock(&db->lock);
-        return make_error_result("invalid name or age", start_us);
+        return make_error_result("invalid id, name, or age", start_us);
+    }
+
+    if (has_id) {
+        size_t existing_index = 0;
+
+        if (bptree_search(&db->index, id, &existing_index)) {
+            pthread_rwlock_unlock(&db->lock);
+            return make_error_result("duplicate id", start_us);
+        }
     }
 
     if (!db_reserve_records(db, db->count + 1)) {
@@ -190,7 +268,7 @@ DbResult db_insert(DbEngine *db, const char *name, int age)
         return make_error_result("out of memory", start_us);
     }
 
-    record.id = db->next_id;
+    record.id = has_id ? id : db->next_id;
     snprintf(record.name, sizeof(record.name), "%s", name);
     record.age = age;
     record_index = db->count;
@@ -211,7 +289,9 @@ DbResult db_insert(DbEngine *db, const char *name, int age)
 
     db->records[record_index] = record;
     db->count++;
-    db->next_id++;
+    if (record.id >= db->next_id && record.id < INT_MAX) {
+        db->next_id = record.id + 1;
+    }
 
     if (!bptree_insert(&db->index, record.id, record_index)) {
         pthread_rwlock_unlock(&db->lock);
@@ -219,7 +299,8 @@ DbResult db_insert(DbEngine *db, const char *name, int age)
     }
 
     if (!json_builder_init(&builder) || !json_builder_append(&builder, "[") ||
-        !append_record_json(&builder, &record) || !json_builder_append(&builder, "]")) {
+        !append_record_json(&builder, &record, all_columns_projection()) ||
+        !json_builder_append(&builder, "]")) {
         json_builder_free(&builder);
         pthread_rwlock_unlock(&db->lock);
         return make_error_result("failed to serialize insert result", start_us);
@@ -235,13 +316,28 @@ DbResult db_insert(DbEngine *db, const char *name, int age)
     return result;
 }
 
-DbResult db_select(DbEngine *db, DbFilter filter)
+DbResult db_insert(DbEngine *db, const char *name, int age)
+{
+    return db_insert_internal(db, 0, 0, name, age);
+}
+
+DbResult db_insert_with_id(DbEngine *db, int id, const char *name, int age)
+{
+    return db_insert_internal(db, 1, id, name, age);
+}
+
+DbResult db_select_projected(DbEngine *db, DbFilter filter, DbProjection projection)
 {
     long long start_us = now_us();
     DbResult result;
     JsonBuilder builder;
     size_t matched = 0;
     int need_comma = 0;
+
+    if (projection.column_count == 0 &&
+        !projection.include_id && !projection.include_name && !projection.include_age) {
+        projection = all_columns_projection();
+    }
 
     if (pthread_rwlock_rdlock(&db->lock) != 0) {
         return make_error_result("failed to acquire read lock", start_us);
@@ -257,7 +353,7 @@ DbResult db_select(DbEngine *db, DbFilter filter)
         size_t record_index = 0;
 
         if (bptree_search(&db->index, filter.id, &record_index) && record_index < db->count) {
-            if (!append_record_json(&builder, &db->records[record_index])) {
+            if (!append_record_json(&builder, &db->records[record_index], projection)) {
                 json_builder_free(&builder);
                 pthread_rwlock_unlock(&db->lock);
                 return make_error_result("failed to serialize indexed row", start_us);
@@ -279,7 +375,7 @@ DbResult db_select(DbEngine *db, DbFilter filter)
                 return make_error_result("failed to serialize select separator", start_us);
             }
 
-            if (!append_record_json(&builder, &db->records[i])) {
+            if (!append_record_json(&builder, &db->records[i], projection)) {
                 json_builder_free(&builder);
                 pthread_rwlock_unlock(&db->lock);
                 return make_error_result("failed to serialize select row", start_us);
@@ -304,6 +400,11 @@ DbResult db_select(DbEngine *db, DbFilter filter)
 
     pthread_rwlock_unlock(&db->lock);
     return result;
+}
+
+DbResult db_select(DbEngine *db, DbFilter filter)
+{
+    return db_select_projected(db, filter, all_columns_projection());
 }
 
 void db_result_free(DbResult *result)

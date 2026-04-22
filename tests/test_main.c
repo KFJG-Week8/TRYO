@@ -13,14 +13,35 @@ static void test_sql_parser(void)
     SqlStatement stmt;
     char err[256];
 
+    assert(sql_parse("INSERT INTO users VALUES (1, 'bumsang', 25);", &stmt, err, sizeof(err)));
+    assert(stmt.type == SQL_INSERT);
+    assert(stmt.insert_has_id);
+    assert(stmt.insert_id == 1);
+    assert(strcmp(stmt.insert_name, "bumsang") == 0);
+    assert(stmt.insert_age == 25);
+
     assert(sql_parse("INSERT INTO users name age VALUES 'kim' 20;", &stmt, err, sizeof(err)));
     assert(stmt.type == SQL_INSERT);
+    assert(!stmt.insert_has_id);
     assert(strcmp(stmt.insert_name, "kim") == 0);
     assert(stmt.insert_age == 20);
 
     assert(sql_parse("SELECT * FROM users;", &stmt, err, sizeof(err)));
     assert(stmt.type == SQL_SELECT);
+    assert(stmt.select_all);
     assert(stmt.where_type == SQL_WHERE_NONE);
+
+    assert(sql_parse("SELECT id, name FROM users;", &stmt, err, sizeof(err)));
+    assert(stmt.type == SQL_SELECT);
+    assert(!stmt.select_all);
+    assert(stmt.select_column_count == 2);
+    assert(stmt.select_columns[0] == SQL_COLUMN_ID);
+    assert(stmt.select_columns[1] == SQL_COLUMN_NAME);
+
+    assert(sql_parse("SELECT name, id FROM users;", &stmt, err, sizeof(err)));
+    assert(stmt.select_column_count == 2);
+    assert(stmt.select_columns[0] == SQL_COLUMN_NAME);
+    assert(stmt.select_columns[1] == SQL_COLUMN_ID);
 
     assert(sql_parse("SELECT * FROM users WHERE id = 42;", &stmt, err, sizeof(err)));
     assert(stmt.where_type == SQL_WHERE_ID);
@@ -78,8 +99,9 @@ static void test_db(void)
     assert(strstr(result.rows_json, "\"id\":1") != NULL);
     db_result_free(&result);
 
-    result = db_insert(&db, "lee", 22);
+    result = db_insert_with_id(&db, 10, "lee", 22);
     assert(result.ok);
+    assert(strstr(result.rows_json, "\"id\":10") != NULL);
     db_result_free(&result);
 
     memset(&filter, 0, sizeof(filter));
@@ -94,10 +116,25 @@ static void test_db(void)
     memset(&filter, 0, sizeof(filter));
     filter.type = DB_FILTER_NAME;
     snprintf(filter.name, sizeof(filter.name), "lee");
-    result = db_select(&db, filter);
+    DbProjection projection;
+    memset(&projection, 0, sizeof(projection));
+    projection.include_id = true;
+    projection.include_name = true;
+    result = db_select_projected(&db, filter, projection);
     assert(result.ok);
     assert(!result.index_used);
-    assert(strstr(result.rows_json, "\"age\":22") != NULL);
+    assert(strstr(result.rows_json, "\"id\":10") != NULL);
+    assert(strstr(result.rows_json, "\"name\":\"lee\"") != NULL);
+    assert(strstr(result.rows_json, "\"age\"") == NULL);
+    db_result_free(&result);
+
+    memset(&projection, 0, sizeof(projection));
+    projection.columns[0] = DB_COLUMN_NAME;
+    projection.columns[1] = DB_COLUMN_ID;
+    projection.column_count = 2;
+    result = db_select_projected(&db, filter, projection);
+    assert(result.ok);
+    assert(strstr(result.rows_json, "{\"name\":\"lee\",\"id\":10}") != NULL);
     db_result_free(&result);
 
     db_destroy(&db);
@@ -105,7 +142,7 @@ static void test_db(void)
     assert(db_init(&db, path, err, sizeof(err)));
     memset(&filter, 0, sizeof(filter));
     filter.type = DB_FILTER_ID;
-    filter.id = 2;
+    filter.id = 10;
     result = db_select(&db, filter);
     assert(result.ok);
     assert(strstr(result.rows_json, "\"name\":\"lee\"") != NULL);
@@ -119,6 +156,12 @@ static void test_http_sql_extract(void)
 {
     char sql[256];
     char err[256];
+
+    assert(http_extract_sql("SELECT id, name FROM users;", sql, sizeof(sql), err, sizeof(err)));
+    assert(strcmp(sql, "SELECT id, name FROM users;") == 0);
+
+    assert(http_extract_sql("  INSERT INTO users VALUES (1, 'bumsang', 25);\n", sql, sizeof(sql), err, sizeof(err)));
+    assert(strcmp(sql, "INSERT INTO users VALUES (1, 'bumsang', 25);") == 0);
 
     assert(http_extract_sql("{\"sql\":\"SELECT * FROM users WHERE id = 1;\"}", sql, sizeof(sql), err, sizeof(err)));
     assert(strcmp(sql, "SELECT * FROM users WHERE id = 1;") == 0);

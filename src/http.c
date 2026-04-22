@@ -204,7 +204,38 @@ int http_send_json(int client_fd, int status_code, const char *json_body)
            send_all(client_fd, json_body, body_len);
 }
 
-int http_extract_sql(const char *body, char *sql_out, size_t sql_size, char *err, size_t err_size)
+static int copy_raw_sql(const char *body, char *sql_out, size_t sql_size, char *err, size_t err_size)
+{
+    const char *start = body;
+    const char *end;
+    size_t len;
+
+    while (*start != '\0' && isspace((unsigned char)*start)) {
+        start++;
+    }
+
+    end = start + strlen(start);
+    while (end > start && isspace((unsigned char)*(end - 1))) {
+        end--;
+    }
+
+    len = (size_t)(end - start);
+    if (len == 0) {
+        set_err(err, err_size, "SQL body is empty");
+        return 0;
+    }
+
+    if (len + 1 > sql_size) {
+        set_err(err, err_size, "SQL body is too long");
+        return 0;
+    }
+
+    memcpy(sql_out, start, len);
+    sql_out[len] = '\0';
+    return 1;
+}
+
+static int extract_json_sql(const char *body, char *sql_out, size_t sql_size, char *err, size_t err_size)
 {
     const char *p = strstr(body, "\"sql\"");
     size_t len = 0;
@@ -282,4 +313,19 @@ int http_extract_sql(const char *body, char *sql_out, size_t sql_size, char *err
 
     sql_out[len] = '\0';
     return 1;
+}
+
+int http_extract_sql(const char *body, char *sql_out, size_t sql_size, char *err, size_t err_size)
+{
+    const char *p = body;
+
+    while (*p != '\0' && isspace((unsigned char)*p)) {
+        p++;
+    }
+
+    if (*p == '{') {
+        return extract_json_sql(body, sql_out, sql_size, err, err_size);
+    }
+
+    return copy_raw_sql(body, sql_out, sql_size, err, err_size);
 }

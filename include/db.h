@@ -9,6 +9,7 @@
 
 #define DB_NAME_MAX 128
 #define DB_PATH_MAX 512
+#define DB_MAX_PROJECTION_COLUMNS 3
 
 typedef struct {
     int id;
@@ -27,6 +28,20 @@ typedef struct {
     int id;
     char name[DB_NAME_MAX];
 } DbFilter;
+
+typedef enum {
+    DB_COLUMN_ID,
+    DB_COLUMN_NAME,
+    DB_COLUMN_AGE
+} DbColumn;
+
+typedef struct {
+    bool include_id;
+    bool include_name;
+    bool include_age;
+    DbColumn columns[DB_MAX_PROJECTION_COLUMNS];
+    size_t column_count;
+} DbProjection;
 
 typedef struct {
     bool ok;
@@ -49,7 +64,9 @@ typedef struct {
 int db_init(DbEngine *db, const char *data_path, char *err, size_t err_size);
 void db_destroy(DbEngine *db);
 DbResult db_insert(DbEngine *db, const char *name, int age);
+DbResult db_insert_with_id(DbEngine *db, int id, const char *name, int age);
 DbResult db_select(DbEngine *db, DbFilter filter);
+DbResult db_select_projected(DbEngine *db, DbFilter filter, DbProjection projection);
 void db_result_free(DbResult *result);
 
 #endif

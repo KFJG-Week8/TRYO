@@ -93,21 +93,21 @@ if prompt_step "4. Health check" "curl ${BASE_URL}/health"; then
   printf "\n"
 fi
 
-insert_json="{\"sql\":\"INSERT INTO users name age VALUES 'kim' 20;\"}"
-insert_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: application/json' --data \"{\\\"sql\\\":\\\"INSERT INTO users name age VALUES 'kim' 20;\\\"}\""
+insert_sql="INSERT INTO users VALUES (1, 'kim', 20);"
+insert_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: text/plain' --data \"${insert_sql}\""
 if prompt_step "5. INSERT through API" "${insert_display}"; then
   curl -s -X POST "${BASE_URL}/query" \
-    -H 'Content-Type: application/json' \
-    --data "${insert_json}"
+    -H 'Content-Type: text/plain' \
+    --data "${insert_sql}"
   printf "\n"
 fi
 
-select_json="{\"sql\":\"SELECT * FROM users;\"}"
-select_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: application/json' --data \"{\\\"sql\\\":\\\"SELECT * FROM users;\\\"}\""
-if prompt_step "6. SELECT through API" "${select_display}"; then
+select_sql="SELECT id, name FROM users;"
+select_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: text/plain' --data \"${select_sql}\""
+if prompt_step "6. SELECT columns through API" "${select_display}"; then
   curl -s -X POST "${BASE_URL}/query" \
-    -H 'Content-Type: application/json' \
-    --data "${select_json}"
+    -H 'Content-Type: text/plain' \
+    --data "${select_sql}"
   printf "\n"
 fi
 
@@ -116,30 +116,30 @@ if prompt_step "7. Parallel INSERT demo" "bash scripts/concurrency_demo.sh ${POR
   printf "\n"
 fi
 
-verify_json="{\"sql\":\"SELECT * FROM users WHERE name = 'parallel${COUNT}';\"}"
-verify_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: application/json' --data \"{\\\"sql\\\":\\\"SELECT * FROM users WHERE name = 'parallel${COUNT}';\\\"}\""
+verify_sql="SELECT * FROM users WHERE name = 'parallel${COUNT}';"
+verify_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: text/plain' --data \"${verify_sql}\""
 if prompt_step "8. Verify parallel row" "${verify_display}"; then
   curl -s -X POST "${BASE_URL}/query" \
-    -H 'Content-Type: application/json' \
-    --data "${verify_json}"
+    -H 'Content-Type: text/plain' \
+    --data "${verify_sql}"
   printf "\n"
 fi
 
-unsupported_json="{\"sql\":\"DELETE FROM users WHERE id = 1;\"}"
-unsupported_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: application/json' --data \"{\\\"sql\\\":\\\"DELETE FROM users WHERE id = 1;\\\"}\""
+unsupported_sql="DELETE FROM users WHERE id = 1;"
+unsupported_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: text/plain' --data \"${unsupported_sql}\""
 if prompt_step "9. Unsupported SQL error" "${unsupported_display}"; then
   curl -s -X POST "${BASE_URL}/query" \
-    -H 'Content-Type: application/json' \
-    --data "${unsupported_json}"
+    -H 'Content-Type: text/plain' \
+    --data "${unsupported_sql}"
   printf "\n"
 fi
 
-wrong_key_json="{\"query\":\"SELECT * FROM users;\"}"
-wrong_key_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: application/json' --data \"{\\\"query\\\":\\\"SELECT * FROM users;\\\"}\""
-if prompt_step "10. Wrong JSON key error" "${wrong_key_display}"; then
+bad_sql="INSERT INTO users VALUES ('broken', 20);"
+bad_sql_display="curl -s -X POST ${BASE_URL}/query -H 'Content-Type: text/plain' --data \"${bad_sql}\""
+if prompt_step "10. Bad SQL syntax error" "${bad_sql_display}"; then
   curl -s -X POST "${BASE_URL}/query" \
-    -H 'Content-Type: application/json' \
-    --data "${wrong_key_json}"
+    -H 'Content-Type: text/plain' \
+    --data "${bad_sql}"
   printf "\n"
 fi
 

@@ -174,7 +174,7 @@ sequenceDiagram
     participant SQL as "SQL Parser"
     participant DB as "DB Engine"
 
-    Client->>API: POST /query {"sql":"INSERT ..."}
+    Client->>API: POST /query INSERT INTO users VALUES (...)
     API->>API: http_extract_sql()
     API->>SQL: sql_parse(sql)
     SQL-->>API: SqlStatement
@@ -190,7 +190,7 @@ API 서버는 HTTP와 routing을 담당합니다.
 SQL parser는 문자열 검증과 구조화를 담당합니다.
 DB engine은 파일, 메모리 records, B+ tree index, lock을 담당합니다.
 
-DB engine은 HTTP request나 JSON body를 모릅니다.
+DB engine은 HTTP request나 raw body/JSON body 형식을 모릅니다.
 이 덕분에 API 계층과 DB 계층의 책임이 분리됩니다.
 ```
 
@@ -201,8 +201,8 @@ DB engine은 HTTP request나 JSON body를 모릅니다.
 | `src/main.c` | CLI 인자를 읽고 `ServerConfig` 생성 |
 | `src/server.c` | socket 생성, accept loop, routing, request logging |
 | `src/thread_pool.c` | worker thread pool과 bounded fd queue |
-| `src/http.c` | HTTP request 읽기, JSON response 전송, SQL JSON 추출 |
-| `src/sql.c` | 지원 SQL을 `SqlStatement`로 파싱 |
+| `src/http.c` | HTTP request 읽기, raw SQL body 또는 JSON body에서 SQL 추출, JSON response 전송 |
+| `src/sql.c` | `INSERT INTO users VALUES (...)`, `SELECT 컬럼 FROM users` 같은 지원 SQL을 `SqlStatement`로 파싱 |
 | `src/db.c` | file-backed users table, records 배열, lock, DB 실행 |
 | `src/bptree.c` | `id -> record index` B+ tree index |
 | `src/util.c` | JSON builder, escaping, 시간 측정 |
@@ -229,8 +229,8 @@ SQL 실행 API입니다.
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"INSERT INTO users name age VALUES '\''kim'\'' 20;"}'
+  -H 'Content-Type: text/plain' \
+  --data "INSERT INTO users VALUES (1, 'kim', 20);"
 ```
 
 성공 응답 예시:
@@ -248,11 +248,16 @@ curl -s -X POST http://127.0.0.1:8080/query \
 ## 지원 SQL
 
 ```sql
+INSERT INTO users VALUES (1, 'bumsang', 25);
 INSERT INTO users name age VALUES 'kim' 20;
 SELECT * FROM users;
+SELECT id, name FROM users;
 SELECT * FROM users WHERE id = 1;
 SELECT * FROM users WHERE name = 'kim';
+SELECT id, name FROM users WHERE name = 'kim';
 ```
+
+기본 사용 방식은 HTTP body에 SQL을 그대로 넣는 것입니다. 기존처럼 `{"sql":"SELECT * FROM users;"}` 형태의 JSON body도 호환용으로 남겨 두었지만, 시연과 스크립트는 raw SQL 입력을 기준으로 합니다.
 
 범위 밖:
 
@@ -264,7 +269,7 @@ JOIN
 복잡한 WHERE 조건
 transaction / rollback
 production-grade HTTP parser
-production-grade JSON parser
+production-grade SQL parser
 ```
 
 ## 빌드와 실행
@@ -308,7 +313,8 @@ SQL parser
 지원하지 않는 SQL 거부
 B+ tree 삽입과 검색
 DB insert/select/reload
-JSON body에서 SQL 추출
+raw SQL body와 JSON body에서 SQL 추출
+SELECT 컬럼 projection
 ```
 
 추가하면 좋은 테스트:

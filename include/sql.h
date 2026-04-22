@@ -5,6 +5,8 @@
 
 #include "db.h"
 
+#define SQL_MAX_SELECT_COLUMNS 3
+
 typedef enum {
     SQL_INSERT,
     SQL_SELECT
@@ -16,11 +18,22 @@ typedef enum {
     SQL_WHERE_NAME
 } SqlWhereType;
 
+typedef enum {
+    SQL_COLUMN_ID,
+    SQL_COLUMN_NAME,
+    SQL_COLUMN_AGE
+} SqlColumn;
+
 typedef struct {
     SqlType type;
     char table[32];
+    int insert_has_id;
+    int insert_id;
     char insert_name[DB_NAME_MAX];
     int insert_age;
+    int select_all;
+    SqlColumn select_columns[SQL_MAX_SELECT_COLUMNS];
+    size_t select_column_count;
     SqlWhereType where_type;
     int where_id;
     char where_name[DB_NAME_MAX];

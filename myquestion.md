@@ -389,9 +389,13 @@ thread 2:
 다른 터미널에서 동시에 INSERT 요청을 보냅니다.
 
 ```sh
-seq 1 100 | xargs -P 20 -I{} curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data "{\"sql\":\"INSERT INTO users name age VALUES 'user{}' 20;\"}" >/dev/null
+seq 1 100 | xargs -P 20 -I{} sh -c '
+  i="$1"
+  id=$((10000 + i))
+  curl -s -X POST http://127.0.0.1:8080/query \
+    -H "Content-Type: text/plain" \
+    --data "INSERT INTO users VALUES (${id}, '\''user${i}'\'', 20);"
+' _ {} >/dev/null
 ```
 
 서버 로그에서 확인합니다.
@@ -405,8 +409,8 @@ seq 1 100 | xargs -P 20 -I{} curl -s -X POST http://127.0.0.1:8080/query \
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/query \
-  -H 'Content-Type: application/json' \
-  --data '{"sql":"SELECT * FROM users WHERE id = 1;"}'
+  -H 'Content-Type: text/plain' \
+  --data "SELECT id, name FROM users WHERE id = 10001;"
 ```
 
 발표에서 말할 포인트:
