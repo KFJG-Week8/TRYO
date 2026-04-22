@@ -1,29 +1,19 @@
-FROM ubuntu:24.04
+FROM ubuntu:latest
 
-ARG DEBIAN_FRONTEND=noninteractive
-ARG USERNAME=jungle
-ARG USER_UID=1000
-ARG USER_GID=1000
+ENV TZ=Asia/Seoul LANG=ko_KR.UTF-8 LANGUAGE=ko_KR.UTF-8
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        bash-completion \
-        build-essential \
-        ca-certificates \
-        clang-format \
-        curl \
-        gdb \
-        git \
-        make \
-        valgrind \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    locales tzdata build-essential sudo gdb vim curl git wget \
+    python3 cmake make gcc sudo valgrind telnet net-tools iproute2\
+    && locale-gen ko_KR.UTF-8 && update-locale LANG=ko_KR.UTF-8
 
-RUN groupadd --gid ${USER_GID} ${USERNAME} \
-    && useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME} -s /bin/bash \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends sudo \
-    && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
-    && chmod 0440 /etc/sudoers.d/${USERNAME} \
-    && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash jungle && usermod -aG sudo jungle
+RUN echo "jungle ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/jungle
+# 암호 설정
+# RUN echo 'jungle:jungle' | chpasswd
 
-WORKDIR /workspaces/TRYO
+RUN mkdir -p /home/jungle/.vscode-server /home/jungle/.codex/skills \
+    && chown -R jungle:jungle /home/jungle
+
+USER jungle
+WORKDIR /home/jungle
